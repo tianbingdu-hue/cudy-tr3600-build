@@ -1,0 +1,143 @@
+name: Build Cudy TR3600 OpenWrt - WiFi Fix and NCM
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+
+    steps:
+      - name: Free build space
+        run: |
+          sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential clang flex bison g++ gawk gcc-multilib \
+            g++-multilib gettext git libncurses-dev libssl-dev \
+            python3 python3-setuptools rsync swig unzip zlib1g-dev \
+            file wget curl libelf-dev
+
+      - name: Fetch the hardware-tested source revision
+        run: |
+          git init openwrt
+          git -C openwrt remote add origin https://github.com/aiamadeus/openwrt.git
+          git -C openwrt fetch --depth=1 origin 5dafc0b17853cee01800f40e2bdc6118a390eb38
+          git -C openwrt checkout --detach FETCH_HEAD
+          test "$(git -C openwrt rev-parse HEAD)" = "5dafc0b17853cee01800f40e2bdc6118a390eb38"
+
+      - name: Update package feeds
+        working-directory: openwrt
+        run: |
+          ./scripts/feeds update -a
+          ./scripts/feeds install -a
+
+      - name: Add MT7996 association hard-lock guard
+        working-directory: openwrt
+        run: |
+          mkdir -p package/kernel/mt76/patches
+          cat > package/kernel/mt76/patches/999-mt7996-reject-short-ps-sync-tlv.patch <<'PATCH'
+          From: Local OpenWrt build fix
+          Subject: [PATCH] wifi: mt76: mt7996: reject short PS sync TLVs
+
+          A zero-length PS-sync TLV makes the receive loop stop making progress
+          and can hard-lock the router when a wireless client associates.
+
+          Reject TLVs shorter than their header as well as TLVs larger than the
+          remaining buffer.
+
+          ---
+           mt7996/mcu.c | 2 +-
+           1 file changed, 1 insertion(+), 1 deletion(-)
+
+          --- a/mt7996/mcu.c
+          +++ b/mt7996/mcu.c
+          @@ -807,7 +807,7 @@ mt7996_mcu_rx_ps_sync(struct mt7996_dev *dev, struct sk_buff *skb)
+          		tlv = (struct tlv *)skb->data;
+          		tag = le16_to_cpu(tlv->tag);
+          		tag_len = le16_to_cpu(tlv->len);
+          -		if (tag_len > len)
+          +		if (tag_len < sizeof(*tlv) || tag_len > len)
+          			break;
+           
+          		switch (tag) {
+          PATCH
+          grep -Fq 'tag_len < sizeof(*tlv) || tag_len > len' \
+            package/kernel/mt76/patches/999-mt7996-reject-short-ps-sync-tlv.patch
+
+      - name: Configure TR3600 image
+        working-directory: openwrt
+        run: |
+          cat > .config <<'EOF'
+          CONFIG_TARGET_mediatek=y
+          CONFIG_TARGET_mediatek_filogic=y
+          CONFIG_TARGET_mediatek_filogic_DEVICE_cudy_tr3600-v1=y
+          CONFIG_PACKAGE_luci=y
+          CONFIG_PACKAGE_luci-ssl=y
+          CONFIG_PACKAGE_luci-i18n-base-zh-cn=y
+          CONFIG_PACKAGE_kmod-usb-net=y
+          CONFIG_PACKAGE_kmod-usb-net-rndis=y
+          CONFIG_PACKAGE_kmod-usb-net-cdc-ether=y
+          CONFIG_PACKAGE_kmod-usb-net-cdc-ncm=y
+          CONFIG_PACKAGE_usbutils=y
+          EOF
+          make defconfig
+          grep -E \
+            'CONFIG_TARGET_mediatek_filogic_DEVICE_cudy_tr3600-v1|CONFIG_PACKAGE_luci|CONFIG_PACKAGE_kmod-usb-net-(rndis|cdc-ncm)' \
+            .config
+          grep -q '^CONFIG_PACKAGE_kmod-usb-net-cdc-ncm=y$' .config
+
+      - name: Download sources
+        working-directory: openwrt
+        run: |
+          make download -j8
+          find dl -type f -size -1024c -delete
+
+      - name: Prepare and verify patched wireless driver
+        working-directory: openwrt
+        run: |
+          make package/mt76/prepare V=s
+          MT76_MCU="$(find build_dir -type f -path '*/mt76-*/mt7996/mcu.c' -print -quit)"
+          test -n "$MT76_MCU"
+          grep -Fq 'tag_len < sizeof(*tlv) || tag_len > len' "$MT76_MCU"
+          echo "Verified WiFi fix in: $MT76_MCU"
+
+      - name: Build firmware
+        working-directory: openwrt
+        run: |
+          make -j2 || make -j1 V=s
+
+      - name: Collect and verify firmware
+        run: |
+          mkdir -p artifact
+          find openwrt/bin/targets/mediatek/filogic -maxdepth 1 -type f \
+            -name '*cudy_tr3600-v1*' -exec cp '{}' artifact/ \;
+          cp openwrt/bin/targets/mediatek/filogic/sha256sums artifact/
+          cp openwrt/bin/targets/mediatek/filogic/profiles.json artifact/
+          find openwrt/bin/targets/mediatek/filogic -maxdepth 1 -type f \
+            \( -name '*.manifest' -o -name '*.buildinfo' \) -exec cp '{}' artifact/ \;
+          test -n "$(find artifact -type f -name '*sysupgrade.bin' -print -quit)"
+          grep -Rqs 'kmod-usb-net-cdc-ncm' artifact/*.manifest
+          printf '%s\n' \
+            'Hardware source: aiamadeus/openwrt@5dafc0b17853cee01800f40e2bdc6118a390eb38' \
+            'WiFi fix: reject short/zero-length MT7996 PS-sync TLVs' \
+            'USB modem: RNDIS + CDC Ethernet + CDC NCM' \
+            > artifact/BUILD-NOTES.txt
+          (cd artifact && sha256sum * > BUILD-SHA256SUMS.txt)
+          ls -lh artifact
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Cudy-TR3600-OpenWrt-WiFiFix-NCM
+          path: artifact/
+          retention-days: 7
+          if-no-files-found: error
