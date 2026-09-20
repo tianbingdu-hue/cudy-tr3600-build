@@ -97,7 +97,6 @@ jobs:
           CONFIG_PACKAGE_mihomo-meta=y
           CONFIG_PACKAGE_nikki=y
           CONFIG_PACKAGE_luci-app-nikki=y
-          CONFIG_PACKAGE_luci-i18n-nikki-zh-cn=y
           CONFIG_PACKAGE_kmod-inet-diag=y
           CONFIG_PACKAGE_kmod-nft-socket=y
           CONFIG_PACKAGE_kmod-nft-tproxy=y
@@ -109,10 +108,10 @@ jobs:
           EOF
           make defconfig
           grep -E \
-            'CONFIG_TARGET_mediatek_filogic_DEVICE_cudy_tr3600-v1|CONFIG_PACKAGE_(luci-app-nikki|luci-i18n-nikki-zh-cn|mihomo-meta|nikki|kmod-(inet-diag|nft-socket|nft-tproxy|tun|dummy)|kmod-usb-net-(rndis|cdc-ncm))' \
+            'CONFIG_TARGET_mediatek_filogic_DEVICE_cudy_tr3600-v1|CONFIG_PACKAGE_(luci-app-nikki|mihomo-meta|nikki|kmod-(inet-diag|nft-socket|nft-tproxy|tun|dummy)|kmod-usb-net-(rndis|cdc-ncm))' \
             .config
           for package in \
-            mihomo-meta nikki luci-app-nikki luci-i18n-nikki-zh-cn \
+            mihomo-meta nikki luci-app-nikki \
             kmod-inet-diag kmod-nft-socket kmod-nft-tproxy kmod-tun kmod-dummy \
             kmod-usb-net-cdc-ncm; do
             grep -q "^CONFIG_PACKAGE_${package}=y$" .config
@@ -151,7 +150,7 @@ jobs:
           MANIFEST="$(find artifact -type f -name '*.manifest' -print -quit)"
           test -n "$MANIFEST"
           for package in \
-            nikki luci-app-nikki luci-i18n-nikki-zh-cn mihomo-meta \
+            nikki luci-app-nikki mihomo-meta \
             kmod-inet-diag kmod-nft-socket kmod-nft-tproxy kmod-tun kmod-dummy \
             kmod-usb-net-cdc-ncm; do
             grep -q "^${package} - " "$MANIFEST"
@@ -161,7 +160,7 @@ jobs:
             'WiFi fix: reject short/zero-length MT7996 PS-sync TLVs' \
             'USB modem: RNDIS + CDC Ethernet + CDC NCM' \
             'Proxy: Nikki + Mihomo Meta, with kernel-matched TProxy/TUN modules' \
-            'LuCI: English plus Simplified Chinese translations for Base and Nikki' \
+            'LuCI: English interface (Nikki included under Services)' \
             > artifact/BUILD-NOTES.txt
           (cd artifact && sha256sum * > BUILD-SHA256SUMS.txt)
           ls -lh artifact
